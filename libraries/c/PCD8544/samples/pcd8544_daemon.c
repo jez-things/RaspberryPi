@@ -43,6 +43,7 @@ Lesser General Public License for more details.
 #include <sys/sysinfo.h>
 #include "PCD8544.h"
 
+#include <err.h>
 #include <syslog.h>
 #include <time.h>
 #include <unistd.h>
@@ -57,6 +58,7 @@ usage(void) {
 }
 
 /* pin setup */
+/*
 static const int _din = 1;
 static const int _sclk = 0;
 static const int _dc = 2;
@@ -64,7 +66,7 @@ static const int _rst = 4;
 static const int _cs = 3;
   
 
-int contrast = 40;/* lcd contrast  */
+int contrast = 40;*/ /* lcd contrast  */
 static unsigned short dodaemon;
 static unsigned short verbose_mode;
 
@@ -73,16 +75,38 @@ static int cur_time(char *, size_t);
 #define LED_DOWN 0x2
 static void led_action(int, int);
 
+typedef struct {
+	char	sc_line1_buf[15];
+	char	sc_line2_buf[15];
+	char	sc_line3_buf[15];
+	char	sc_line4_buf[15];
+	int	sc_contrast;
+	time_t	sc_lastupdate;
+} screen_t;
+
+typedef struct {
+	int sens_light;
+	int sens_uptime;
+	int sens_humidity;
+} sensor_t;
+
+static screen_t *screen_init(const int _din, const int _sclk, const int _dc, const int _rst, const int _cs, const int contrast);
+static int screen_update(screen_t *);
+static int statistics_update(screen_t *, sensor_t *);
+static int sensors_read(sensor_t *);
+static int screen_include(screen_t *);
+
 int 
 main (int argc, char **argv)
 {
 	int ch;
-	unsigned long uptime;
-	struct sysinfo sys_info;
-	char uptimeInfo[15], lightInfo[15], timebuf[15];
-	int lightlevel;
+	/*char uptimeInfo[15], lightInfo[15], timebuf[15];*/
+	/*int lightlevel;*/
+	int ocontrast = 40; /* Contrast defaults to 40 */
+	screen_t *sc;
+	sensor_t  sensors;
 	extern char *optarg;
-	extern int optind, opterr, optopt;
+	extern int optind;/*, opterr, optopt;*/
 
 
 	while ((ch = getopt(argc, argv, "Dvc:")) != -1) {
@@ -94,7 +118,7 @@ main (int argc, char **argv)
 				verbose_mode++;
 				break;
 			case 'c':
-				contrast = atoi(optarg);
+				ocontrast = atoi(optarg);
 				break;
 			default:
 				usage();
@@ -109,53 +133,27 @@ main (int argc, char **argv)
 	/* print infos */
 	syslog(LOG_LOCAL0|LOG_INFO, "pilab");
   
-	pinMode(DISP_LED_PIN, OUTPUT);
+	/*pinMode(DISP_LED_PIN, OUTPUT);*/
 	/* check wiringPi setup */
-	if (wiringPiSetup() == -1) {
-		syslog(LOG_LOCAL0|LOG_ERR, "wiringPi-Error");
-		exit(1);
+  
+	if ((sc = screen_init(1, 0, 2, 4, 3, ocontrast)) == NULL) {
+		syslog(LOG_LOCAL0|LOG_INFO, "failed to init screen");
+		err(3, "failed to init screen");
 	}
-	if (pcf8591Setup(200, 0x48) == -1) {
-		syslog(LOG_LOCAL0|LOG_ERR, "wiringPi-Error");
-		exit(1);
-  	}
-  
-	/* init and clear lcd */
-	LCDInit(_sclk, _din, _dc, _cs, _rst, contrast);
-	LCDclear();
-  
-	/* show logo */
-	LCDshowLogo();
-  
 	delay(2000);
   
 	for (;;) {
 		/* clear lcd */
 		LCDclear();
 	  
-		if(sysinfo(&sys_info) != 0) {
-			syslog(LOG_LOCAL0|LOG_ERR, "sysinfo-Error\n");
-		}
-	  
-		/* uptime */
-		cur_time(timebuf, sizeof timebuf);
-		uptime = sys_info.uptime / 60;
-		sprintf(uptimeInfo, "up %ld", uptime);
-		/* light */
-		lightlevel = (int) analogRead(200);
-		sprintf(lightInfo, "light %ld/255", lightlevel);
-		if (lightlevel < 50) {
-			led_action(DISP_LED_PIN, LED_UP);
-		}
-	  
-	  
+		if (sensors_read(&sensors) < 0)
+			syslog(LOG_LOCAL0|LOG_INFO, "failed to read data from sensors");
+		if (statistics_update(sc, &sensors) < 0)
+			syslog(LOG_LOCAL0|LOG_INFO, "failed to update statistics");
+		if (screen_include(sc) < 0)
+			syslog(LOG_LOCAL0|LOG_INFO, "failed to update statistics");
 		/* build screen */
-		LCDdrawstring(0, 0, "PiLab:");
-		LCDdrawline(0, 10, 83, 10, BLACK);
-		LCDdrawstring(0, 12, uptimeInfo);
-		LCDdrawstring(0, 20, timebuf);
-		LCDdrawstring(0, 28, lightInfo);
-		LCDdisplay();
+		screen_update(sc);
 	  
 		sleep(5);
 	}
@@ -170,7 +168,7 @@ cur_time(char *timep, size_t timepsiz)
 
 	curtime = time(NULL);
 	timp = localtime(&curtime);
-	strftime(timep, timepsiz, "%T", timp);
+	strftime(timep, timepsiz, "%H:%M", timp);
 	return (0);
 }
 
@@ -185,4 +183,94 @@ static void led_action(int action, int pin)
 			break;
 	}
 	return;
+}
+
+
+static int 
+statistics_update(screen_t *l, sensor_t *sensp)
+{
+	snprintf(l->sc_line2_buf, sizeof(l->sc_line2_buf), "up %d", sensp->sens_uptime);
+	/* light */
+	snprintf(l->sc_line3_buf, sizeof(l->sc_line3_buf), "light %d/255", sensp->sens_light );
+	return (0);
+	  
+}
+
+static int
+sensors_read(sensor_t *sensp)
+{
+	struct sysinfo sys_info;
+
+	sensp->sens_light = (int) analogRead(200);
+
+	if(sysinfo(&sys_info) != 0) {
+		syslog(LOG_LOCAL0|LOG_ERR, "sysinfo-Error\n");
+		return (-1);
+	}
+	sensp->sens_uptime = sys_info.uptime / 60;/* uptime */
+	sensp->sens_humidity = -1;
+	return (0);
+}
+
+static screen_t *
+screen_init(const int _din, const int _sclk, const int _dc, const int _rst, const int _cs, const int contrast)
+{
+	screen_t *scretp;
+
+	if (wiringPiSetup() == -1) {
+		syslog(LOG_LOCAL0|LOG_ERR, "wiringPi-Error");
+		return (NULL);
+	}
+	if (pcf8591Setup(200, 0x48) == -1) {
+		syslog(LOG_LOCAL0|LOG_ERR, "wiringPi-Error");
+		return (NULL);
+  	}
+  
+	/* init and clear lcd */
+	LCDInit(_sclk, _din, _dc, _cs, _rst, contrast);
+	LCDclear();
+  
+	/* show logo */
+	LCDshowLogo();
+
+	if ((scretp = calloc(1, sizeof(screen_t))) == NULL) {
+		return (NULL);
+	}
+	scretp->sc_contrast = contrast;
+	snprintf(scretp->sc_line1_buf, sizeof(scretp->sc_line1_buf), "Pilab");
+	cur_time(scretp->sc_line2_buf, sizeof(scretp->sc_line2_buf));
+	return (scretp);
+}
+
+static int
+screen_include(screen_t *scp)
+{
+	FILE	*f;
+	char	*chp;
+
+	if ((f = fopen("/tmp/pcd8544.line", "r")) == NULL)
+		return (-1);
+	fgets(scp->sc_line4_buf, sizeof(scp->sc_line4_buf), f);
+	fclose(f);
+	if ((chp = strchr(scp->sc_line4_buf, '\n')) != NULL)
+		*chp = '\0';
+	else
+		return (-1);
+	return (0);
+}
+
+static int 
+screen_update(screen_t *scp)
+{
+
+	LCDdrawstring(0, 0, scp->sc_line1_buf);
+	LCDdrawline(0, 10, 83, 10, BLACK);
+	if (scp->sc_line2_buf[0] != '\0')
+		LCDdrawstring(0, 12, scp->sc_line2_buf);
+	if (scp->sc_line3_buf[0] != '\0')
+		LCDdrawstring(0, 20, scp->sc_line3_buf);
+	if (scp->sc_line4_buf[0] != '\0')
+		LCDdrawstring(0, 28, scp->sc_line4_buf);
+	LCDdisplay();
+	return (0);
 }
