@@ -38,24 +38,24 @@ Lesser General Public License for more details.
 #define PCD8544_DISPLAYALLON 0x1
 #define PCD8544_DISPLAYINVERTED 0x5
 
-// H = 0
+/* H = 0 */
 #define PCD8544_FUNCTIONSET 0x20
 #define PCD8544_DISPLAYCONTROL 0x08
 #define PCD8544_SETYADDR 0x40
 #define PCD8544_SETXADDR 0x80
 
-// H = 1
+/* H = 1 */
 #define PCD8544_SETTEMP 0x04
 #define PCD8544_SETBIAS 0x10
 #define PCD8544_SETVOP 0x80
 
 #define swap(a, b) { uint8_t t = a; a = b; b = t; }
 
- // calibrate clock constants
+ /* calibrate clock constants */
 #define CLKCONST_1  8000
-#define CLKCONST_2  400  // 400 is a good tested value for Raspberry Pi
+#define CLKCONST_2  400  /* 400 is a good tested value for Raspberry Pi */
 
-// keywords
+/* keywords */
 #define LSBFIRST  0
 #define MSBFIRST  1
 
