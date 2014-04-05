@@ -1,6 +1,6 @@
-CFLAGS=-W -Wall -ansi -pedantic -g
-pcd8544daemon: pcd8544_daemon.o PCD8544.o ../PCD8544.h
-	cc $(CFLAGS) -lwiringPi -o pcd8544daemon pcd8544_daemon.o PCD8544.o
+CFLAGS=-W -Wall -ansi -pedantic -g  -D_BSD_SOURCE 
+pcd8544d: pcd8544_daemon.o PCD8544.o ../PCD8544.h
+	cc $(CFLAGS) -lwiringPi -o pcd8544d pcd8544_daemon.o PCD8544.o
 
 pcd8544_daemon.o: pcd8544_daemon.c ../PCD8544.h
 	cc $(CFLAGS) -I.. -c -o pcd8544_daemon.o pcd8544_daemon.c
