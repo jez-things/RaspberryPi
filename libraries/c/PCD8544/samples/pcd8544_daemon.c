@@ -48,38 +48,30 @@ Lesser General Public License for more details.
 #include <time.h>
 #include <unistd.h>
 
-#define DISP_LED_PIN 24 /* phisical pin 25 on rev2 */
+#define DISP_LED_GPIO 5 /* phisical pin 25 on rev2 */
 
-static void 
-usage(void) {
-	fprintf(stderr, "usage: pcd8544 -Dv -c [contrast");
-	exit(64);
+static void usage(void);
+#define DIN_PIN		1
+#define SCLK_PIN	0
+#define DC_PIN		2
+#define RST_PIN		4
+#define CS_PIN		3
 
-}
-
-/* pin setup */
-/*
-static const int _din = 1;
-static const int _sclk = 0;
-static const int _dc = 2;
-static const int _rst = 4;
-static const int _cs = 3;
-  
-
-int contrast = 40;*/ /* lcd contrast  */
+/*int contrast = 40;*/ /* lcd contrast  */
 static unsigned short dodaemon;
 static unsigned short verbose_mode;
+static unsigned short led_on_darkness;
 
-static int cur_time(char *, size_t);
-#define LED_UP 0x1
-#define LED_DOWN 0x2
-static void led_action(int, int);
+typedef enum {LED_UP, LED_DOWN} lstate_t;
+/*#define LED_UP 0x1
+#define LED_DOWN 0x2*/
 
 typedef struct {
 	char	sc_line1_buf[15];
 	char	sc_line2_buf[15];
 	char	sc_line3_buf[15];
 	char	sc_line4_buf[15];
+	char	sc_line5_buf[15];
 	int	sc_contrast;
 	time_t	sc_lastupdate;
 } screen_t;
@@ -90,11 +82,20 @@ typedef struct {
 	int sens_humidity;
 } sensor_t;
 
+typedef struct {
+	lstate_t	l_state;
+	unsigned int	l_pin;
+} led_t;
+
 static screen_t *screen_init(const int _din, const int _sclk, const int _dc, const int _rst, const int _cs, const int contrast);
-static int screen_update(screen_t *);
-static int statistics_update(screen_t *, sensor_t *);
-static int sensors_read(sensor_t *);
-static int screen_include(screen_t *);
+static int	 cur_time(char *, size_t);
+static int	 screen_update(screen_t *);
+static int	 statistics_update(screen_t *, sensor_t *);
+static int	 sensors_read(sensor_t *);
+static int	 screen_include(screen_t *);
+static void	 led_init(led_t *, unsigned int);
+static void	 led_setstate(led_t *, lstate_t);
+/*static void	 led_action(lstate_t, int);*/
 
 int 
 main (int argc, char **argv)
@@ -105,17 +106,21 @@ main (int argc, char **argv)
 	int ocontrast = 40; /* Contrast defaults to 40 */
 	screen_t *sc;
 	sensor_t  sensors;
+	led_t	  displed;
 	extern char *optarg;
 	extern int optind;/*, opterr, optopt;*/
 
 
-	while ((ch = getopt(argc, argv, "Dvc:")) != -1) {
+	while ((ch = getopt(argc, argv, "lDvc:")) != -1) {
 		switch (ch) {
+			case 'l':
+				led_on_darkness=1;
+				break;
 			case 'D':
-				dodaemon++;
+				dodaemon=1;
 				break;
 			case 'v':
-				verbose_mode++;
+				verbose_mode=1;
 				break;
 			case 'c':
 				ocontrast = atoi(optarg);
@@ -132,15 +137,23 @@ main (int argc, char **argv)
 	openlog("pcd8544", LOG_PID|LOG_PERROR, LOG_LOCAL0);
 	/* print infos */
 	syslog(LOG_LOCAL0|LOG_INFO, "pilab");
+
   
-	/*pinMode(DISP_LED_PIN, OUTPUT);*/
-	/* check wiringPi setup */
-  
-	if ((sc = screen_init(1, 0, 2, 4, 3, ocontrast)) == NULL) {
+
+
+	if ((sc = screen_init(DIN_PIN, SCLK_PIN, DC_PIN, RST_PIN, CS_PIN, ocontrast)) == NULL) {
 		syslog(LOG_LOCAL0|LOG_INFO, "failed to init screen");
 		err(3, "failed to init screen");
 	}
+
+	/* check wiringPi setup */
 	delay(2000);
+ 	if (verbose_mode)
+		syslog(LOG_LOCAL0|LOG_DEBUG, "initialisation of screen led");
+        led_init(&displed, DISP_LED_GPIO);
+ 	if (verbose_mode)
+		syslog(LOG_LOCAL0|LOG_DEBUG, "initialisation of screen led - bringing up");
+	led_setstate(&displed, LED_UP);
   
 	for (;;) {
 		/* clear lcd */
@@ -148,10 +161,19 @@ main (int argc, char **argv)
 	  
 		if (sensors_read(&sensors) < 0)
 			syslog(LOG_LOCAL0|LOG_INFO, "failed to read data from sensors");
+		if (led_on_darkness) {
+			if (sensors.sens_light < 50 && displed.l_state != LED_UP) {
+				if (verbose_mode)
+					syslog(LOG_LOCAL0|LOG_DEBUG, "bringing screen led up");
+				led_setstate(&displed, LED_UP);
+			} else if (sensors.sens_light > 50 && displed.l_state == LED_UP)
+				led_setstate(&displed, LED_DOWN);
+		}
+
 		if (statistics_update(sc, &sensors) < 0)
 			syslog(LOG_LOCAL0|LOG_INFO, "failed to update statistics");
 		if (screen_include(sc) < 0)
-			syslog(LOG_LOCAL0|LOG_INFO, "failed to update statistics");
+			syslog(LOG_LOCAL0|LOG_INFO, "failed to include file line");
 		/* build screen */
 		screen_update(sc);
 	  
@@ -172,16 +194,26 @@ cur_time(char *timep, size_t timepsiz)
 	return (0);
 }
 
-static void led_action(int action, int pin)
+static void
+led_init(led_t *led, unsigned int pin)
 {
-	switch (action) {
+	pinMode(pin, OUTPUT);
+	led->l_pin = pin;
+	delay(2000);
+	return;
+}
+
+static void led_setstate(led_t *l, lstate_t st)
+{
+	switch (st) {
 		case LED_UP:
-			digitalWrite(pin, HIGH);
+			digitalWrite(l->l_pin, HIGH);
 			break;
 		case LED_DOWN:
-			digitalWrite(pin, LOW);
+			digitalWrite(l->l_pin, LOW);
 			break;
 	}
+	l->l_state = st;
 	return;
 }
 
@@ -273,4 +305,10 @@ screen_update(screen_t *scp)
 		LCDdrawstring(0, 28, scp->sc_line4_buf);
 	LCDdisplay();
 	return (0);
+}
+
+static void 
+usage(void) {
+	fprintf(stderr, "usage: pcd8544 -lDv -c [contrast]\n");
+	exit(64);
 }
